@@ -1,12 +1,18 @@
 ﻿from pathlib import Path
 from datetime import datetime
 import re
+from copy import deepcopy
+from uuid import uuid4
 
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font
 from openpyxl.utils.cell import column_index_from_string
 from rapidfuzz import process, fuzz
+from src.core.excel_safety import (
+    captured_sources, attach_capture, validate_configured_headers,
+    atomic_write, atomic_update, ExcelHeadersChangedError, retry,
+)
 
 from src.core.excel_inspector import parse_sheet_ref
 from src.core.search_executor import (
@@ -53,7 +59,7 @@ def get_result_sheet_names(file_path: str) -> list[str]:
     if not path.exists():
         raise FileNotFoundError(f"No existe el archivo resultado: {path}")
 
-    workbook = load_workbook(path, read_only=True, data_only=True)
+    workbook = retry(lambda: load_workbook(path, read_only=True, data_only=True), path)
     try:
         return list(workbook.sheetnames)
     finally:
@@ -66,7 +72,7 @@ def read_result_sheet_sample(file_path: str, sheet_ref: str, max_rows: int = 5, 
     if not path.exists():
         raise FileNotFoundError(f"No existe el archivo resultado: {path}")
 
-    workbook = load_workbook(path, read_only=True, data_only=True)
+    workbook = retry(lambda: load_workbook(path, read_only=True, data_only=True), path)
     try:
         sheet_names = workbook.sheetnames
         sheet_index, sheet_name = parse_sheet_ref(sheet_ref, sheet_names)
@@ -107,7 +113,7 @@ def read_result_headers(file_path: str, sheet_ref: str, header_row: int) -> dict
     if not path.exists():
         raise FileNotFoundError(f"No existe el archivo resultado: {path}")
 
-    workbook = load_workbook(path, read_only=True, data_only=True)
+    workbook = retry(lambda: load_workbook(path, read_only=True, data_only=True), path)
     try:
         sheet_names = workbook.sheetnames
         sheet_index, sheet_name = parse_sheet_ref(sheet_ref, sheet_names)
@@ -300,7 +306,30 @@ def update_mapped_data_columns(
         df.at[row_index, destination_column] = base_record.get(base_alias)
 
 
-def run_completion(config: dict) -> tuple[pd.DataFrame, dict]:
+def run_completion(config: dict, progress=None) -> tuple[pd.DataFrame, dict]:
+    if progress:
+        progress("Capturando resultado y maestro...")
+    with captured_sources({role: config[role]["archivo"]["ruta"] for role in ("previous_result", "base")}) as captures:
+        local = deepcopy(config)
+        for role in captures:
+            local[role]["archivo"]["ruta"] = captures[role].snapshot
+        if progress:
+            progress("Validando encabezados...")
+        validate_configured_headers(local["base"])
+        expected_headers = local["previous_result"].get("expected_headers")
+        if expected_headers is not None:
+            previous = local["previous_result"]
+            actual = read_result_headers(previous["archivo"]["ruta"], previous["hoja"]["nombre_detectado"], int(previous["fila_header"]))["headers"]
+            if actual != expected_headers:
+                raise ExcelHeadersChangedError("Los encabezados del resultado cambiaron. Vuelva a leer las columnas.")
+        if progress:
+            progress("Completando registros pendientes...")
+        df, summary = _run_completion(local)
+        attach_capture(df, captures, "previous_result")
+        return df, summary
+
+
+def _run_completion(config: dict) -> tuple[pd.DataFrame, dict]:
     previous = config["previous_result"]
     file_path = Path(previous["archivo"]["ruta"])
     sheet_name = previous["hoja"]["nombre_detectado"]
@@ -430,6 +459,7 @@ def run_completion(config: dict) -> tuple[pd.DataFrame, dict]:
         if not choices:
             raise ValueError("La base no tiene valores validos para busqueda por similaridad")
 
+        match_cache = {}
         for idx in rows_to_process:
             valor_buscado = df.at[idx, search_col]
             query = normalize_text(valor_buscado)
@@ -449,10 +479,9 @@ def run_completion(config: dict) -> tuple[pd.DataFrame, dict]:
                 no_encontrados += 1
                 continue
 
-            match = find_best_similarity(
-                query,
-                choices,
-            )
+            if query not in match_cache:
+                match_cache[query] = find_best_similarity(query, choices)
+            match = match_cache[query]
 
             if match is None:
                 update_technical_columns(
@@ -578,21 +607,19 @@ def export_completion_result(df: pd.DataFrame, config: dict) -> Path:
     if output_mode == "excel_nuevo":
         output_dir = original_path.parent
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = output_dir / f"{original_path.stem}_completado_{timestamp}.xlsx"
+        output_path = output_dir / f"{original_path.stem}_completado_{timestamp}_{uuid4().hex[:8]}.xlsx"
         sheet_name = sanitize_sheet_name(wanted_sheet)
 
-        with pd.ExcelWriter(output_path, engine="xlsxwriter") as writer:
-            df.to_excel(writer, index=False, sheet_name=sheet_name)
-            apply_xlsxwriter_format(writer, df, sheet_name)
-
-        return output_path
+        def serialize(temporary):
+            with pd.ExcelWriter(temporary, engine="xlsxwriter") as writer:
+                df.to_excel(writer, index=False, sheet_name=sheet_name)
+                apply_xlsxwriter_format(writer, df, sheet_name)
+        return atomic_write(output_path, serialize)
 
     if output_mode == "hoja_nueva_mismo_excel":
-        workbook = load_workbook(original_path)
-        sheet_name = unique_sheet_name(workbook, wanted_sheet)
-        write_dataframe_to_openpyxl_sheet(workbook, sheet_name, df)
-        workbook.save(original_path)
-        workbook.close()
-        return original_path
+        def modify(workbook):
+            sheet_name = unique_sheet_name(workbook, wanted_sheet)
+            write_dataframe_to_openpyxl_sheet(workbook, sheet_name, df)
+        return atomic_update(df, original_path, modify)
 
     raise ValueError(f"Modo de salida de completado no soportado: {output_mode}")

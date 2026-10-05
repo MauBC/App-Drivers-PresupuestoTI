@@ -80,6 +80,11 @@ backups/
 *.tmp
 *.temp
 *.log
+.presupuesto_*.xlsx
+.presupuesto_*.xlsm
+*_resultado_busqueda_*.xlsx
+*_completado_*.xlsx
+debug_driver_*.xlsx
 ~$*
 *.swp
 *.swo

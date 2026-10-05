@@ -1,4 +1,6 @@
-﻿from pathlib import Path
+from copy import deepcopy
+from src.gui.background_tasks import tasks_for
+from pathlib import Path
 import tkinter as tk
 import customtkinter as ctk
 from tkinter import messagebox, filedialog
@@ -358,24 +360,28 @@ class SearchBuilderView(ctk.CTkFrame):
             messagebox.showerror("Error", str(error))
 
     def execute_search(self):
+        def failed(error):
+            self.log(f"ERROR EJECUCION: {error}")
+            messagebox.showerror("Error", str(error))
+
         try:
-            config = self.build_runtime_config()
-
-            self.btn_execute.configure(state="disabled", text="Procesando...")
-            self.update_idletasks()
-
-            self.log("")
+            tasks = tasks_for(self)
+            if tasks.busy:
+                raise RuntimeError("Ya hay un proceso en curso. Espere a que termine antes de ejecutar otro.")
+            config = deepcopy(self.build_runtime_config())
             self.log("Iniciando busqueda...")
-            self.log(f"Tipo de busqueda: {config['match']['tipo_busqueda']}")
-            self.log("Leyendo template y base...")
+        except Exception as error:
+            failed(error)
+            return
 
-            if config["salida"]["modo"] == "nueva_hoja_template":
-                self.template_panel.close_session()
-                self.base_panel.close_session()
-                self.log("Sesiones Excel cerradas para poder escribir en el template.")
+        def work(report):
+            result_df, summary = run_search(config, progress=report)
+            report("Guardando resultado...")
+            output_path = export_result(result_df, config)
+            return output_path, summary
 
-            result_df, summary = run_search(config)
-
+        def finished(result):
+            output_path, summary = result
             self.log("Busqueda terminada.")
             self.log(f"Filas template: {summary['template_rows']}")
             self.log(f"Filas base: {summary['base_rows']}")
@@ -384,16 +390,13 @@ class SearchBuilderView(ctk.CTkFrame):
             self.log(f"APROXIMADO: {summary['aproximados']}")
             self.log(f"NO ENCONTRADO: {summary['no_encontrados']}")
 
-            output_path = export_result(result_df, config)
-
             self.log(f"Excel generado: {output_path}")
             messagebox.showinfo("Busqueda terminada", f"Resultado generado en:\n{output_path}")
 
-        except Exception as error:
-            self.log(f"ERROR EJECUCION: {error}")
-            messagebox.showerror("Error", str(error))
-        finally:
-            self.btn_execute.configure(state="normal", text="Ejecutar busqueda")
+        tasks.start(
+            work, self.btn_execute, "Ejecutar busqueda", finished, failed,
+            lambda text: self.log(text),
+        )
 
     def save_profile(self):
         try:
@@ -547,18 +550,28 @@ class SearchBuilderView(ctk.CTkFrame):
             messagebox.showerror("Error", str(error))
 
     def execute_completion(self):
+        def failed(error):
+            self.log(f"[completar] ERROR EJECUCION: {error}")
+            messagebox.showerror("Error", str(error))
+
         try:
-            config = self.build_completion_config()
-
-            self.btn_complete.configure(state="disabled", text="Completando...")
-            self.update_idletasks()
-
-            self.log("")
+            tasks = tasks_for(self)
+            if tasks.busy:
+                raise RuntimeError("Ya hay un proceso en curso. Espere a que termine antes de ejecutar otro.")
+            config = deepcopy(self.build_completion_config())
             self.log("[completar] Iniciando completado...")
-            self.log("[completar] Se procesaran solo filas con VALIDADO = 0")
+        except Exception as error:
+            failed(error)
+            return
 
-            result_df, summary = run_completion(config)
+        def work(report):
+            result_df, summary = run_completion(config, progress=report)
+            report("Guardando resultado...")
+            output_path = export_completion_result(result_df, config)
+            return output_path, summary
 
+        def finished(result):
+            output_path, summary = result
             self.log("[completar] Proceso terminado.")
             self.log(f"[completar] Filas resultado anterior: {summary['total_filas_resultado']}")
             self.log(f"[completar] Filas reprocesadas: {summary['filas_reprocesadas']}")
@@ -567,16 +580,13 @@ class SearchBuilderView(ctk.CTkFrame):
             self.log(f"[completar] APROXIMADO nuevos: {summary['aproximados_nuevos']}")
             self.log(f"[completar] NO ENCONTRADO finales: {summary['no_encontrados_finales']}")
 
-            output_path = export_completion_result(result_df, config)
-
             self.log(f"[completar] Excel completado generado: {output_path}")
             messagebox.showinfo("Completado terminado", f"Resultado generado en:\n{output_path}")
 
-        except Exception as error:
-            self.log(f"[completar] ERROR EJECUCION: {error}")
-            messagebox.showerror("Error", str(error))
-        finally:
-            self.btn_complete.configure(state="normal", text="Completar resultado")
+        tasks.start(
+            work, self.btn_complete, "Completar resultado", finished, failed,
+            lambda text: self.log(text),
+        )
 
     def close_resources(self):
         self.template_panel.close_session()

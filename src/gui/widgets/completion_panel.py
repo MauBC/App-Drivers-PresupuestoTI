@@ -1,4 +1,6 @@
-﻿from pathlib import Path
+from copy import deepcopy
+from src.gui.background_tasks import tasks_for
+from pathlib import Path
 import tkinter as tk
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
@@ -474,6 +476,7 @@ class CompletionPanel(ctk.CTkScrollableFrame):
             "version": 1,
             "checkpoint": 3,
             "previous_result": {
+                "expected_headers": list(headers),
                 "archivo": {
                     "ruta": str(Path(self.completion_file_path)),
                     "nombre": Path(self.completion_file_path).name,
@@ -537,18 +540,28 @@ class CompletionPanel(ctk.CTkScrollableFrame):
             messagebox.showerror("Error", str(error))
 
     def execute_completion(self):
+        def failed(error):
+            self._log(f"[completar] ERROR EJECUCION: {error}")
+            messagebox.showerror("Error", str(error))
+
         try:
-            config = self.build_config()
-
-            self.btn_complete.configure(state="disabled", text="Completando...")
-            self.update_idletasks()
-
-            self._log("")
+            tasks = tasks_for(self)
+            if tasks.busy:
+                raise RuntimeError("Ya hay un proceso en curso. Espere a que termine antes de ejecutar otro.")
+            config = deepcopy(self.build_config())
             self._log("[completar] Iniciando completado...")
-            self._log("[completar] Se procesaran solo filas con VALIDADO = 0")
+        except Exception as error:
+            failed(error)
+            return
 
-            result_df, summary = run_completion(config)
+        def work(report):
+            result_df, summary = run_completion(config, progress=report)
+            report("Guardando resultado...")
+            output_path = export_completion_result(result_df, config)
+            return output_path, summary
 
+        def finished(result):
+            output_path, summary = result
             self._log("[completar] Proceso terminado.")
             self._log(f"[completar] Filas resultado anterior: {summary['total_filas_resultado']}")
             self._log(f"[completar] Filas reprocesadas: {summary['filas_reprocesadas']}")
@@ -557,13 +570,10 @@ class CompletionPanel(ctk.CTkScrollableFrame):
             self._log(f"[completar] APROXIMADO nuevos: {summary['aproximados_nuevos']}")
             self._log(f"[completar] NO ENCONTRADO finales: {summary['no_encontrados_finales']}")
 
-            output_path = export_completion_result(result_df, config)
-
             self._log(f"[completar] Resultado generado: {output_path}")
             messagebox.showinfo("Completado terminado", f"Resultado generado en:\n{output_path}")
 
-        except Exception as error:
-            self._log(f"[completar] ERROR EJECUCION: {error}")
-            messagebox.showerror("Error", str(error))
-        finally:
-            self.btn_complete.configure(state="normal", text="Completar resultado")
+        tasks.start(
+            work, self.btn_complete, "Completar resultado", finished, failed,
+            lambda text: self._log(text),
+        )

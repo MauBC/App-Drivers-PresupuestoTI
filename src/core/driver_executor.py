@@ -1,11 +1,15 @@
 from pathlib import Path
 from datetime import datetime
 import re
+from copy import deepcopy
+from uuid import uuid4
 
 import pandas as pd
-from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font
 from openpyxl.utils.cell import column_index_from_string
+from src.core.excel_safety import (
+    captured_sources, attach_capture, atomic_write, atomic_update, ExcelHeadersChangedError,
+)
 
 from src.core.search_executor import normalize_text, sanitize_sheet_name, apply_xlsxwriter_format
 
@@ -475,7 +479,30 @@ def validate_driver_config(config: dict):
                 raise ValueError(f"El grupo de filtro '{name}' no tiene valores seleccionados")
 
 
-def run_driver(config: dict) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+def run_driver(config: dict, progress=None) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+    validate_driver_config(config)
+    if progress:
+        progress("Capturando resultado y maestro...")
+    with captured_sources({role: config[role]["file_path"] for role in ("resultado", "base")}) as captures:
+        local = deepcopy(config)
+        if progress:
+            progress("Validando encabezados...")
+        for role in captures:
+            local[role]["file_path"] = captures[role].snapshot
+            expected_headers = local[role].get("expected_headers")
+            if expected_headers is not None:
+                from src.core.excel_inspector import read_headers
+                actual = read_headers(local[role]["file_path"], local[role]["sheet_name"], int(local[role]["header_row"]))["headers"]
+                if actual != expected_headers:
+                    raise ExcelHeadersChangedError("Los encabezados cambiaron. Vuelva a leerlos antes de generar el driver.")
+        if progress:
+            progress("Generando drivers...")
+        df, observed, summary = _run_driver(local)
+        attach_capture(df, captures, "resultado")
+        return df, observed, summary
+
+
+def _run_driver(config: dict) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     validate_driver_config(config)
 
     driver_type = config["driver_type"]
@@ -876,9 +903,13 @@ def build_driver_debug_report(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = output_dir / f"debug_driver_{timestamp}.xlsx"
+    output_path = output_dir / f"debug_driver_{timestamp}_{uuid4().hex[:8]}.xlsx"
 
-    with pd.ExcelWriter(output_path, engine="xlsxwriter") as writer:
+    def serialize(temporary):
+        with pd.ExcelWriter(temporary, engine="xlsxwriter") as writer:
+            write_sheets(writer)
+
+    def write_sheets(writer):
         sheets = [
             ("DEBUG_CONFIG", df_config),
             ("BASE_DNI_SAMPLE", df_base_sample),
@@ -891,7 +922,7 @@ def build_driver_debug_report(
             df.to_excel(writer, index=False, sheet_name=clean_sheet)
             apply_xlsxwriter_format(writer, df, clean_sheet)
 
-    return output_path
+    return atomic_write(output_path, serialize)
 
 
 
@@ -1110,6 +1141,14 @@ def write_dataframe_to_workbook_sheet(workbook, sheet_name: str, df: pd.DataFram
     header_fill = PatternFill("solid", fgColor="5E6F32")
     header_font = Font(color="FFFFFF", bold=True)
 
+    formats = {
+        COL_PORCENTAJE: "0.00%", COL_PORCENTAJE_DISTRIBUCION: "0.00%",
+        COL_CANTIDAD_EQUIVALENTE: "#,##0.00", COL_PRECIO: "#,##0.00",
+        COL_PRECIO_DISTRIBUIDO: "#,##0.00", "IMPORTE_TOTAL": "#,##0.00",
+    }
+    column_formats = [formats.get(header) for header in df.columns]
+    widths = [max(12, len(str(header)) + 2) for header in df.columns]
+
     for col_idx, col_name in enumerate(df.columns, start=1):
         cell = ws.cell(row=1, column=col_idx)
         cell.value = col_name
@@ -1118,36 +1157,21 @@ def write_dataframe_to_workbook_sheet(workbook, sheet_name: str, df: pd.DataFram
 
     for row_idx, row_values in enumerate(df.itertuples(index=False, name=None), start=2):
         for col_idx, value in enumerate(row_values, start=1):
-            ws.cell(row=row_idx, column=col_idx).value = safe_excel_value(value)
+            cell = ws.cell(row=row_idx, column=col_idx)
+            cell.value = safe_excel_value(value)
+            if column_formats[col_idx - 1]:
+                cell.number_format = column_formats[col_idx - 1]
+            if row_idx <= 200 and cell.value is not None:
+                widths[col_idx - 1] = max(widths[col_idx - 1], len(str(cell.value)) + 2)
 
     ws.freeze_panes = "A2"
 
     if ws.max_row >= 1 and ws.max_column >= 1:
         ws.auto_filter.ref = ws.dimensions
 
-    for column_cells in ws.columns:
-        max_length = 12
-        column_letter = column_cells[0].column_letter
-
-        for cell in column_cells[:200]:
-            value = cell.value
-            if value is not None:
-                max_length = max(max_length, len(str(value)) + 2)
-
-        ws.column_dimensions[column_letter].width = min(max_length, 45)
-
-    for row in ws.iter_rows(min_row=2):
-        for cell in row:
-            header = ws.cell(row=1, column=cell.column).value
-
-            if header in {COL_PORCENTAJE, COL_PORCENTAJE_DISTRIBUCION}:
-                cell.number_format = "0.00%"
-
-            if header == COL_CANTIDAD_EQUIVALENTE:
-                cell.number_format = "#,##0.00"
-
-            if header in {COL_PRECIO, COL_PRECIO_DISTRIBUIDO, "IMPORTE_TOTAL"}:
-                cell.number_format = "#,##0.00"
+    for col_idx, width in enumerate(widths, start=1):
+        column_letter = ws.cell(row=1, column=col_idx).column_letter
+        ws.column_dimensions[column_letter].width = min(width, 45)
 
 
 def export_driver_result(
@@ -1178,31 +1202,27 @@ def export_driver_result(
     if source_file_path is not None:
         original_path = Path(source_file_path)
 
-        if not original_path.exists():
-            raise FileNotFoundError(f"No existe el Excel origen: {original_path}")
-
-        workbook = load_workbook(original_path)
-
-        try:
+        def modify(workbook):
             write_dataframe_to_workbook_sheet(workbook, "DRIVER", df_driver)
             write_dataframe_to_workbook_sheet(workbook, "RESUMEN_DRIVER", df_resumen_driver)
             write_dataframe_to_workbook_sheet(workbook, "RESUMEN_CECO", df_resumen_ceco)
             write_dataframe_to_workbook_sheet(workbook, "OBSERVADOS", df_observados)
             write_dataframe_to_workbook_sheet(workbook, "RESUMEN", df_resumen)
 
-            workbook.save(original_path)
-            return original_path
-        finally:
-            workbook.close()
+        return atomic_update(df_driver, original_path, modify)
 
     # Modo legacy: generar archivo nuevo si algun flujo antiguo lo usa.
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    file_path = output_path / f"{output_name}_{timestamp}.xlsx"
+    file_path = output_path / f"{output_name}_{timestamp}_{uuid4().hex[:8]}.xlsx"
 
-    with pd.ExcelWriter(file_path, engine="xlsxwriter") as writer:
+    def serialize(temporary):
+        with pd.ExcelWriter(temporary, engine="xlsxwriter") as writer:
+            write_sheets(writer)
+
+    def write_sheets(writer):
         sheets = [
             ("DRIVER", df_driver),
             ("RESUMEN_DRIVER", df_resumen_driver),
@@ -1216,4 +1236,4 @@ def export_driver_result(
             df.to_excel(writer, index=False, sheet_name=clean_sheet)
             apply_xlsxwriter_format(writer, df, clean_sheet)
 
-    return file_path
+    return atomic_write(file_path, serialize)

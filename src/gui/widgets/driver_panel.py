@@ -1,3 +1,5 @@
+from copy import deepcopy
+from src.gui.background_tasks import tasks_for
 from pathlib import Path
 import tkinter as tk
 import customtkinter as ctk
@@ -690,6 +692,7 @@ class DriverPanel(ctk.CTkFrame):
         filter_config = self.build_filter_config(result_config)
 
         result_data = {
+            "expected_headers": list(self.result_panel.headers),
             "file_path": result_config["archivo"]["ruta"],
             "sheet_name": result_config["hoja"]["nombre_detectado"],
             "header_row": result_config["fila_header"],
@@ -738,6 +741,7 @@ class DriverPanel(ctk.CTkFrame):
             "driver_type": driver_type,
             "resultado": result_data,
             "base": {
+                "expected_headers": list(self.base_panel.headers),
                 "file_path": base_config["archivo"]["ruta"],
                 "sheet_name": base_config["hoja"]["nombre_detectado"],
                 "header_row": base_config["fila_header"],
@@ -817,38 +821,32 @@ class DriverPanel(ctk.CTkFrame):
             messagebox.showerror("Error", str(error))
 
     def execute_driver(self):
+        def failed(error):
+            self._log(f"[drivers] ERROR EJECUCION: {error}")
+            messagebox.showerror("Error", str(error))
+
         try:
-            config = self.build_driver_config()
-
-            self.btn_execute.configure(state="disabled", text="Generando...")
-            self.update_idletasks()
-
-            self.result_panel.close_session()
-            self.base_panel.close_session()
-
-            self._log("")
-            # Debug DNI desactivado.
-            # Activar solo cuando necesites revisar columnas/DNI/base.
-            #
-            # debug_path = build_driver_debug_report(
-            #     config=config,
-            #     output_dir=Path(config["output"]["dir"]) / "_debug_driver",
-            # )
-            # self._log(f"[drivers] Debug generado: {debug_path}")
-
+            tasks = tasks_for(self)
+            if tasks.busy:
+                raise RuntimeError("Ya hay un proceso en curso. Espere a que termine antes de ejecutar otro.")
+            config = deepcopy(self.build_driver_config())
             self._log("[drivers] Iniciando generacion de driver...")
+        except Exception as error:
+            failed(error)
+            return
 
-            df_driver, df_observados, summary = run_driver(config)
-
+        def work(report):
+            df_driver, df_observados, summary = run_driver(config, progress=report)
+            report("Guardando drivers...")
             output_path = export_driver_result(
-                df_driver=df_driver,
-                df_observados=df_observados,
-                summary=summary,
-                output_dir=config["output"]["dir"],
-                output_name=config["output"]["name"],
+                df_driver=df_driver, df_observados=df_observados, summary=summary,
+                output_dir=config["output"]["dir"], output_name=config["output"]["name"],
                 source_file_path=config["resultado"]["file_path"],
             )
+            return output_path, summary
 
+        def finished(result):
+            output_path, summary = result
             self._log("[drivers] Driver generado correctamente")
             self._log(f"[drivers] Filas driver: {summary['filas_driver']}")
             self._log(f"[drivers] Filtro usado: {summary.get('filtro_usado', 'NO')}")
@@ -864,11 +862,10 @@ class DriverPanel(ctk.CTkFrame):
 
             messagebox.showinfo("Driver generado", f"Resultado generado en:\n{output_path}")
 
-        except Exception as error:
-            self._log(f"[drivers] ERROR EJECUCION: {error}")
-            messagebox.showerror("Error", str(error))
-        finally:
-            self.btn_execute.configure(state="normal", text="Generar driver")
+        tasks.start(
+            work, self.btn_execute, "Generar driver", finished, failed,
+            lambda text: self._log(text),
+        )
 
     def close_resources(self):
         self.result_panel.close_session()

@@ -1,6 +1,7 @@
 ﻿from pathlib import Path
 from openpyxl import load_workbook
 from openpyxl.utils.cell import column_index_from_string, get_column_letter
+from src.core.excel_safety import retry
 
 
 VALID_EXTENSIONS = {".xlsx", ".xlsm"}
@@ -8,6 +9,9 @@ VALID_EXTENSIONS = {".xlsx", ".xlsm"}
 
 def validate_excel_path(file_path: str) -> Path:
     path = Path(file_path)
+
+    if path.name.startswith("~$"):
+        raise ValueError("Seleccione el Excel original, no el archivo temporal ~$ de Office")
 
     if not path.exists():
         raise FileNotFoundError(f"No existe el archivo: {path}")
@@ -52,11 +56,11 @@ class ExcelWorkbookSession:
 
     def __init__(self, file_path: str):
         self.path = validate_excel_path(file_path)
-        self.workbook = load_workbook(
+        self.workbook = retry(lambda: load_workbook(
             self.path,
             read_only=True,
             data_only=True,
-        )
+        ), self.path)
         self.sheet_names = list(self.workbook.sheetnames)
 
     def close(self):
