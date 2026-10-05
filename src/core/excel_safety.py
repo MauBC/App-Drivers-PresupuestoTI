@@ -331,9 +331,15 @@ def atomic_update(df, destination, modify):
 def validate_configured_headers(config):
     """Valida las posiciones utilizadas sin impedir cambios en filas de datos."""
     from src.core.excel_inspector import read_headers
+    from src.core.excel_headers import clean_header
     info = read_headers(config["archivo"]["ruta"], config["hoja"]["nombre_detectado"], int(config["fila_header"]))
     for column in config["columnas"] + [config["columna_busqueda"]]:
         index = column["indice_0"]
         expected = column.get("header_detectado")
-        if expected is not None and (index >= len(info["headers"]) or info["headers"][index] != expected):
-            raise ExcelHeadersChangedError("Los encabezados cambiaron desde la configuracion. Vuelva a leerlos y revise las columnas.")
+        actual = info["headers"][index] if index < len(info["headers"]) else None
+        if expected is not None and actual != clean_header(expected):
+            raise ExcelHeadersChangedError(
+                f"El encabezado de la columna {index + 1} cambió: "
+                f"se esperaba '{expected}' y se encontró '{actual}'. "
+                "Vuelva a leer los encabezados y revise las columnas."
+            )

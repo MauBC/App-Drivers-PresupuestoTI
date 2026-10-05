@@ -2,6 +2,7 @@
 from openpyxl import load_workbook
 from openpyxl.utils.cell import column_index_from_string, get_column_letter
 from src.core.excel_safety import retry
+from src.core.excel_headers import clean_header, prepare_headers
 
 
 VALID_EXTENSIONS = {".xlsx", ".xlsm"}
@@ -131,7 +132,7 @@ class ExcelWorkbookSession:
 
         last_real_index = -1
         for i, value in enumerate(raw_values):
-            if value is not None and str(value).strip() != "":
+            if clean_header(value) != "":
                 last_real_index = i
 
         if last_real_index == -1:
@@ -139,12 +140,7 @@ class ExcelWorkbookSession:
 
         raw_values = raw_values[: last_real_index + 1]
 
-        headers = []
-        for i, value in enumerate(raw_values, start=1):
-            if value is None or str(value).strip() == "":
-                headers.append(f"COL_{i}")
-            else:
-                headers.append(str(value).strip())
+        headers = prepare_headers(raw_values)
 
         preview_rows = []
         start_row = header_row + 1

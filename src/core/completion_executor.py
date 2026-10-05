@@ -5,6 +5,7 @@ from copy import deepcopy
 from uuid import uuid4
 
 import pandas as pd
+from src.core.excel_headers import clean_header, header_key, prepare_headers, align_dataframe_headers
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font
 from openpyxl.utils.cell import column_index_from_string
@@ -105,7 +106,7 @@ def read_result_sheet_sample(file_path: str, sheet_ref: str, max_rows: int = 5, 
 
 
 def normalize_header_name(value) -> str:
-    return str(value).strip().upper()
+    return clean_header(value).upper()
 
 
 def read_result_headers(file_path: str, sheet_ref: str, header_row: int) -> dict:
@@ -136,15 +137,10 @@ def read_result_headers(file_path: str, sheet_ref: str, header_row: int) -> dict
             [],
         )
 
-        headers = []
-        for index, value in enumerate(row, start=1):
-            if value is None or str(value).strip() == "":
-                headers.append(f"COL_{index}")
-            else:
-                headers.append(str(value).strip())
-
-        while headers and headers[-1].startswith("COL_"):
-            headers.pop()
+        raw_headers = list(row)
+        while raw_headers and not clean_header(raw_headers[-1]):
+            raw_headers.pop()
+        headers = prepare_headers(raw_headers)
 
         if not headers:
             raise ValueError("No se detectaron headers en el resultado")
@@ -178,13 +174,14 @@ def get_missing_required_technical_columns(headers: list[str]) -> list[str]:
 
 
 def resolve_dataframe_column(headers: list[str], column_ref: str) -> str:
-    value = str(column_ref).strip()
+    value = clean_header(column_ref)
 
     if not value:
         raise ValueError("La columna no puede estar vacia")
 
+    prepare_headers(headers)
     for header in headers:
-        if value.lower() == str(header).lower():
+        if header_key(value) == header_key(header):
             return header
 
     if value.isdigit():
@@ -344,6 +341,9 @@ def _run_completion(config: dict) -> tuple[pd.DataFrame, dict]:
         engine="openpyxl",
     )
 
+    align_dataframe_headers(df, file_path, sheet_name, header_row)
+    df.rename(columns={h: normalize_header_name(h) for h in df.columns
+                       if normalize_header_name(h) in TECHNICAL_COLUMNS}, inplace=True)
     df = df.dropna(how="all").copy()
     headers = list(df.columns)
 
