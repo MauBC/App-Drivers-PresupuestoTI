@@ -1,6 +1,7 @@
 ﻿import customtkinter as ctk
 
 from src.gui.search_builder_view import SearchBuilderView
+from src.core.excel_safety import configure_logging
 
 
 class PresupuestoApp(ctk.CTk):
@@ -23,6 +24,10 @@ class PresupuestoApp(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def on_close(self):
+        tasks = getattr(self, "_background_tasks", None)
+        if tasks is not None and tasks.busy:
+            self.view.log("Hay un proceso en curso. Espere a que termine y vuelva a cerrar la ventana.")
+            return
         try:
             self.view.close_resources()
         finally:
@@ -30,6 +35,7 @@ class PresupuestoApp(ctk.CTk):
 
 
 if __name__ == "__main__":
+    diagnostic_path = configure_logging()
     ctk.set_appearance_mode("dark")
 
     # Tema interno estable de CustomTkinter.
@@ -41,4 +47,5 @@ if __name__ == "__main__":
     ctk.set_window_scaling(1.0)
 
     app = PresupuestoApp()
+    app.view.log(f"Diagnostico de archivos: {diagnostic_path}")
     app.mainloop()

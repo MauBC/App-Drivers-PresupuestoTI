@@ -2,10 +2,16 @@
 from datetime import datetime
 import unicodedata
 import re
+from copy import deepcopy
+from uuid import uuid4
 
 import pandas as pd
 from openpyxl import load_workbook
 from rapidfuzz import process, fuzz
+from src.core.excel_safety import (
+    captured_sources, attach_capture, validate_configured_headers,
+    atomic_write, atomic_update,
+)
 
 
 ESTADO_EXACTO = "EXACTO"
@@ -356,6 +362,7 @@ def run_similarity_search(config: dict, template_records: list[dict], base_recor
         base_choice_to_record_index.append(index)
 
     results = []
+    match_cache = {}
 
     for template_record in template_records:
         valor_buscado = get_search_value(template_record, template_search_col)
@@ -391,10 +398,9 @@ def run_similarity_search(config: dict, template_records: list[dict], base_recor
             )
             continue
 
-        match = find_best_similarity(
-            query,
-            base_choices,
-        )
+        if query not in match_cache:
+            match_cache[query] = find_best_similarity(query, base_choices)
+        match = match_cache[query]
 
         if match is None:
             results.append(
@@ -446,7 +452,24 @@ def run_similarity_search(config: dict, template_records: list[dict], base_recor
     return results
 
 
-def run_search(config: dict) -> tuple[pd.DataFrame, dict]:
+def run_search(config: dict, progress=None) -> tuple[pd.DataFrame, dict]:
+    if progress:
+        progress("Capturando template y maestro...")
+    with captured_sources({role: config[role]["archivo"]["ruta"] for role in ("template", "base")}) as captures:
+        local = deepcopy(config)
+        if progress:
+            progress("Validando encabezados...")
+        for role in captures:
+            local[role]["archivo"]["ruta"] = captures[role].snapshot
+            validate_configured_headers(local[role])
+        if progress:
+            progress("Procesando busqueda...")
+        df, summary = _run_search(local)
+        attach_capture(df, captures, "template")
+        return df, summary
+
+
+def _run_search(config: dict) -> tuple[pd.DataFrame, dict]:
     template_records = read_configured_excel(config["template"], "template")
     base_records = read_configured_excel(config["base"], "base")
 
@@ -560,40 +583,29 @@ def export_result(df: pd.DataFrame, config: dict) -> Path:
         output_dir = template_path.parent
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = output_dir / f"{template_path.stem}_resultado_busqueda_{timestamp}.xlsx"
+        output_path = output_dir / f"{template_path.stem}_resultado_busqueda_{timestamp}_{uuid4().hex[:8]}.xlsx"
 
-        with pd.ExcelWriter(output_path, engine="xlsxwriter") as writer:
-            df.to_excel(writer, index=False, sheet_name=sheet_name)
-            apply_xlsxwriter_format(writer, df, sheet_name)
+        def serialize(temporary):
+            with pd.ExcelWriter(temporary, engine="xlsxwriter") as writer:
+                df.to_excel(writer, index=False, sheet_name=sheet_name)
+                apply_xlsxwriter_format(writer, df, sheet_name)
 
-        return output_path
+        return atomic_write(output_path, serialize)
 
     if output_mode == "nueva_hoja_template":
         template_path = Path(config["template"]["archivo"]["ruta"])
 
-        if not template_path.exists():
-            raise FileNotFoundError(f"No existe el template: {template_path}")
-
-        workbook = load_workbook(template_path)
-
-        if sheet_name in workbook.sheetnames:
-            del workbook[sheet_name]
-
-        ws = workbook.create_sheet(sheet_name)
-
-        for col_idx, col_name in enumerate(df.columns, start=1):
-            ws.cell(row=1, column=col_idx).value = col_name
-
-        for row_idx, row_values in enumerate(df.itertuples(index=False, name=None), start=2):
-            for col_idx, value in enumerate(row_values, start=1):
-                ws.cell(row=row_idx, column=col_idx).value = value
-
-        ws.freeze_panes = "A2"
-        ws.auto_filter.ref = ws.dimensions
-
-        workbook.save(template_path)
-        workbook.close()
-
-        return template_path
+        def modify(workbook):
+            if sheet_name in workbook.sheetnames:
+                del workbook[sheet_name]
+            ws = workbook.create_sheet(sheet_name)
+            for col_idx, col_name in enumerate(df.columns, start=1):
+                ws.cell(row=1, column=col_idx).value = col_name
+            for row_idx, row_values in enumerate(df.itertuples(index=False, name=None), start=2):
+                for col_idx, value in enumerate(row_values, start=1):
+                    ws.cell(row=row_idx, column=col_idx).value = value
+            ws.freeze_panes = "A2"
+            ws.auto_filter.ref = ws.dimensions
+        return atomic_update(df, template_path, modify)
 
     raise ValueError(f"Modo de salida no soportado: {output_mode}")

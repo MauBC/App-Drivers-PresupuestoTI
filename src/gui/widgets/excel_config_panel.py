@@ -5,7 +5,9 @@ from tkinter import filedialog, messagebox
 
 from src.core.base_profile_store import save_base_profile, load_base_profile
 from src.core.excel_inspector import (
-    ExcelWorkbookSession,
+    get_sheet_names,
+    read_sheet_sample,
+    read_headers,
     resolve_column,
 )
 
@@ -235,12 +237,11 @@ class ExcelConfigPanel(ctk.CTkScrollableFrame):
         try:
             self._log(f"[{self.role}] Cargando archivo. Esto puede tardar unos segundos si el Excel es grande...")
 
-            new_session = ExcelWorkbookSession(file_path)
+            sheet_names = get_sheet_names(file_path)
 
             self.close_session()
-            self.excel_session = new_session
             self.file_path = file_path
-            self.sheet_names = self.excel_session.sheet_names
+            self.sheet_names = sheet_names
 
             self.header_info = None
             self.headers = []
@@ -255,18 +256,18 @@ class ExcelConfigPanel(ctk.CTkScrollableFrame):
             self._set_textbox(self.sheet_textbox, "\n".join(lines))
             self._set_textbox(self.header_textbox, "Coloca la hoja y la fila header para leer headers.")
 
-            self._log(f"[{self.role}] Archivo cargado una sola vez y sesion Excel activa: {Path(file_path).name}")
+            self._log(f"[{self.role}] Hojas consultadas y archivo cerrado: {Path(file_path).name}")
         except Exception as error:
             messagebox.showerror("Error", str(error))
             self._log(f"[{self.role}] Error al cargar archivo: {error}")
 
     def validate_sheet(self):
         try:
-            if self.excel_session is None:
+            if not self.file_path:
                 raise ValueError("Primero selecciona un archivo Excel")
 
             sheet_ref = self.sheet_entry.get().strip()
-            sample = self.excel_session.read_sheet_sample(sheet_ref)
+            sample = read_sheet_sample(self.file_path, sheet_ref)
 
             self.sheet_result_label.configure(
                 text=f"Hoja detectada: {sample['sheet_index'] + 1} - {sample['sheet_name']}"
@@ -283,14 +284,14 @@ class ExcelConfigPanel(ctk.CTkScrollableFrame):
                 lines.append(" | ".join(row))
 
             self._set_textbox(self.sheet_textbox, "\n".join(lines))
-            self._log(f"[{self.role}] Hoja validada usando sesion activa: {sample['sheet_name']}")
+            self._log(f"[{self.role}] Hoja consultada y archivo cerrado: {sample['sheet_name']}")
         except Exception as error:
             messagebox.showerror("Error", str(error))
             self._log(f"[{self.role}] Error al validar hoja: {error}")
 
     def load_headers(self):
         try:
-            if self.excel_session is None:
+            if not self.file_path:
                 raise ValueError("Primero selecciona un archivo Excel")
 
             sheet_ref = self.sheet_entry.get().strip()
@@ -300,7 +301,8 @@ class ExcelConfigPanel(ctk.CTkScrollableFrame):
 
             header_row = int(self.header_entry.get().strip())
 
-            self.header_info = self.excel_session.read_headers(
+            self.header_info = read_headers(
+                file_path=self.file_path,
                 sheet_ref=sheet_ref,
                 header_row=header_row,
             )
@@ -319,7 +321,7 @@ class ExcelConfigPanel(ctk.CTkScrollableFrame):
                 lines.append(f"{index}. {header}")
 
             self._set_textbox(self.header_textbox, "\n".join(lines))
-            self._log(f"[{self.role}] Headers cargados usando sesion activa: {len(self.headers)}")
+            self._log(f"[{self.role}] Encabezados consultados y archivo cerrado: {len(self.headers)}")
         except Exception as error:
             messagebox.showerror("Error", str(error))
             self._log(f"[{self.role}] Error al leer headers: {error}")
@@ -516,12 +518,11 @@ class ExcelConfigPanel(ctk.CTkScrollableFrame):
 
             file_path = Path(selected)
 
-        new_session = ExcelWorkbookSession(str(file_path))
+        sheet_names = get_sheet_names(str(file_path))
 
         self.close_session()
-        self.excel_session = new_session
         self.file_path = str(file_path)
-        self.sheet_names = self.excel_session.sheet_names
+        self.sheet_names = sheet_names
 
         self.header_info = None
         self.headers = []
@@ -542,7 +543,7 @@ class ExcelConfigPanel(ctk.CTkScrollableFrame):
         self.header_entry.delete(0, "end")
         self.header_entry.insert(0, str(header_row))
 
-        sample = self.excel_session.read_sheet_sample(str(sheet_ref))
+        sample = read_sheet_sample(self.file_path, str(sheet_ref))
         self.sheet_result_label.configure(
             text=f"Hoja detectada: {sample['sheet_index'] + 1} - {sample['sheet_name']}"
         )
@@ -559,7 +560,8 @@ class ExcelConfigPanel(ctk.CTkScrollableFrame):
 
         self._set_textbox(self.sheet_textbox, "\n".join(sheet_lines))
 
-        self.header_info = self.excel_session.read_headers(
+        self.header_info = read_headers(
+            file_path=self.file_path,
             sheet_ref=str(sheet_ref),
             header_row=header_row,
         )
