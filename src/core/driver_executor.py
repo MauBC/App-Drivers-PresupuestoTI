@@ -5,6 +5,7 @@ from copy import deepcopy
 from uuid import uuid4
 
 import pandas as pd
+from src.core.excel_headers import clean_header, header_key, prepare_headers, align_dataframe_headers
 from openpyxl.styles import PatternFill, Font
 from openpyxl.utils.cell import column_index_from_string
 from src.core.excel_safety import (
@@ -34,13 +35,14 @@ COL_VALIDADO = "VALIDADO"
 
 
 def resolve_dataframe_column(headers: list[str], column_ref: str) -> str:
-    value = str(column_ref).strip()
+    value = clean_header(column_ref)
 
     if not value:
         raise ValueError("La columna no puede estar vacia")
 
+    prepare_headers(headers)
     for header in headers:
-        if value.lower() == str(header).lower():
+        if header_key(value) == header_key(header):
             return header
 
     if value.isdigit():
@@ -76,6 +78,8 @@ def read_excel_with_origin(file_path: str, sheet_name: str, header_row: int) -> 
         dtype=object,
         engine="openpyxl",
     )
+
+    align_dataframe_headers(df, path, sheet_name, header_row)
 
     df[COL_FILA_ORIGEN] = [header_row + 1 + i for i in range(len(df))]
     df = df.dropna(how="all").copy()
@@ -546,8 +550,8 @@ def _run_driver(config: dict) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     )
 
     validado_col = None
-    if COL_VALIDADO in result_headers:
-        validado_col = COL_VALIDADO
+    if any(header_key(h) == header_key(COL_VALIDADO) for h in result_headers):
+        validado_col = resolve_dataframe_column(result_headers, COL_VALIDADO)
 
     base_dni_col = resolve_dataframe_column(base_headers, base_cfg["dni_col"])
     base_ceco_col = resolve_dataframe_column(base_headers, base_cfg["ceco_col"])
@@ -806,7 +810,7 @@ def build_driver_debug_report(
     if driver_type == DRIVER_CANTIDAD:
         result_price_col = resolve_dataframe_column(result_headers, result_cfg["price_col"])
 
-    validado_col = COL_VALIDADO if COL_VALIDADO in result_headers else None
+    validado_col = next((h for h in result_headers if header_key(h) == header_key(COL_VALIDADO)), None)
 
     base_dni_col = resolve_dataframe_column(base_headers, base_cfg["dni_col"])
     base_ceco_col = resolve_dataframe_column(base_headers, base_cfg["ceco_col"])
