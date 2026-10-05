@@ -14,7 +14,8 @@ from src.core.search_executor import run_search
 from conftest import source_config
 
 
-def pump(root, condition, timeout=8):
+def pump(root, condition, timeout=20):
+    # Verifica comportamiento, no velocidad: margen para Tk/Windows bajo carga.
     deadline = time.monotonic() + timeout
     while not condition() and time.monotonic() < deadline:
         root.update()
@@ -166,6 +167,33 @@ def test_panel_reports_processing_failure_and_can_retry(tk_root, search_config, 
         view.execute_search()
         pump(tk_root, lambda: not manager.busy)
         assert results
+    finally:
+        if manager.thread:
+            manager.thread.join(timeout=6)
+        view.close_resources()
+        view.destroy()
+
+
+def test_panel_reports_actual_suffix_when_requested_sheet_is_input(tk_root, search_config, monkeypatch):
+    view = SearchBuilderView(tk_root)
+    messages, failures = [], []
+    search_config["salida"].update(modo="nueva_hoja_template", nombre_hoja_resultado="Datos")
+    monkeypatch.setattr(view, "build_runtime_config", lambda: search_config)
+    monkeypatch.setattr(search_gui.messagebox, "showinfo", lambda title, text: messages.append(text))
+    monkeypatch.setattr(search_gui.messagebox, "showerror", lambda title, text: failures.append(text))
+    manager = tasks_for(view)
+    try:
+        view.execute_search()
+        pump(tk_root, lambda: not manager.busy)
+        assert not failures and "Hojas: Datos_2" in messages[0]
+        assert "Hojas generadas: Datos_2" in view.log_textbox.get("1.0", "end")
+        from openpyxl import load_workbook
+        workbook = load_workbook(search_config["template"]["archivo"]["ruta"])
+        try:
+            assert workbook["Datos"]["A1"].value == "Titulo"
+            assert workbook["Datos_2"]["D2"].value == 10
+        finally:
+            workbook.close()
     finally:
         if manager.thread:
             manager.thread.join(timeout=6)

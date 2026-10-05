@@ -22,7 +22,12 @@ def baseline_function(module, path, name):
     parsed = ast.parse(source)
     node = next(n for n in parsed.body if isinstance(n, ast.FunctionDef) and n.name == name)
     namespace = vars(module).copy()
-    exec(compile(ast.Module(body=[node], type_ignores=[]), path, "exec"), namespace)
+    nodes = [node]
+    if name == "write_dataframe_to_workbook_sheet":
+        # El benchmark necesita el helper destructivo original solo en su referencia.
+        helper = next(n for n in parsed.body if isinstance(n, ast.FunctionDef) and n.name == "delete_sheet_if_exists")
+        nodes.insert(0, helper)
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), path, "exec"), namespace)
     return namespace[name]
 
 

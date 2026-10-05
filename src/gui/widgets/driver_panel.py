@@ -843,10 +843,10 @@ class DriverPanel(ctk.CTkFrame):
                 output_dir=config["output"]["dir"], output_name=config["output"]["name"],
                 source_file_path=config["resultado"]["file_path"],
             )
-            return output_path, summary
+            return output_path, summary, df_driver.attrs["excel_output_sheets"]
 
         def finished(result):
-            output_path, summary = result
+            output_path, summary, output_sheets = result
             self._log("[drivers] Driver generado correctamente")
             self._log(f"[drivers] Filas driver: {summary['filas_driver']}")
             self._log(f"[drivers] Filtro usado: {summary.get('filtro_usado', 'NO')}")
@@ -859,8 +859,9 @@ class DriverPanel(ctk.CTkFrame):
             self._log(f"[drivers] DNI no encontrados: {summary['dni_no_encontrados']}")
             self._log(f"[drivers] Filas expandidas por DNI: {summary['filas_expandidas_por_dni']}")
             self._log(f"[drivers] Excel origen actualizado: {output_path}")
+            self._log(f"[drivers] Hojas generadas: {', '.join(output_sheets)}")
 
-            messagebox.showinfo("Driver generado", f"Resultado generado en:\n{output_path}")
+            messagebox.showinfo("Driver generado", f"Resultado generado en:\n{output_path}\nHojas: {', '.join(output_sheets)}")
 
         tasks.start(
             work, self.btn_execute, "Generar driver", finished, failed,

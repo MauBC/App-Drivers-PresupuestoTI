@@ -513,6 +513,21 @@ def sanitize_sheet_name(sheet_name: str) -> str:
     return clean
 
 
+def unique_sheet_name(workbook, wanted_name: str) -> str:
+    """Nombre libre en Excel, incluyendo colisiones tras limpiar/truncar."""
+    base = sanitize_sheet_name(wanted_name)
+    existing = {name.casefold() for name in workbook.sheetnames}
+    if base.casefold() not in existing:
+        return base
+    counter = 2
+    while True:
+        suffix = f"_{counter}"
+        candidate = f"{base[:31 - len(suffix)]}{suffix}"
+        if candidate.casefold() not in existing:
+            return candidate
+        counter += 1
+
+
 def apply_xlsxwriter_format(writer, df: pd.DataFrame, sheet_name: str):
     workbook = writer.book
     worksheet = writer.sheets[sheet_name]
@@ -590,15 +605,17 @@ def export_result(df: pd.DataFrame, config: dict) -> Path:
                 df.to_excel(writer, index=False, sheet_name=sheet_name)
                 apply_xlsxwriter_format(writer, df, sheet_name)
 
-        return atomic_write(output_path, serialize)
+        output = atomic_write(output_path, serialize)
+        df.attrs["excel_output_sheets"] = [sheet_name]
+        return output
 
     if output_mode == "nueva_hoja_template":
         template_path = Path(config["template"]["archivo"]["ruta"])
+        created_sheets = []
 
         def modify(workbook):
-            if sheet_name in workbook.sheetnames:
-                del workbook[sheet_name]
-            ws = workbook.create_sheet(sheet_name)
+            ws = workbook.create_sheet(unique_sheet_name(workbook, sheet_name))
+            created_sheets.append(ws.title)
             for col_idx, col_name in enumerate(df.columns, start=1):
                 ws.cell(row=1, column=col_idx).value = col_name
             for row_idx, row_values in enumerate(df.itertuples(index=False, name=None), start=2):
@@ -606,6 +623,8 @@ def export_result(df: pd.DataFrame, config: dict) -> Path:
                     ws.cell(row=row_idx, column=col_idx).value = value
             ws.freeze_panes = "A2"
             ws.auto_filter.ref = ws.dimensions
-        return atomic_update(df, template_path, modify)
+        output = atomic_update(df, template_path, modify)
+        df.attrs["excel_output_sheets"] = created_sheets
+        return output
 
     raise ValueError(f"Modo de salida no soportado: {output_mode}")
