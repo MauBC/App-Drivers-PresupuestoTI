@@ -76,9 +76,13 @@ temporal y se valida su integridad antes de publicar. La actualizacion usa
 destino existente) o enlace no destructivo en otros sistemas. Un sufijo
 aleatorio evita colisiones entre archivos nuevos generados en el mismo segundo.
 
-Busqueda sigue reemplazando la hoja resultado homonima; completado sigue
-buscando un nombre disponible; drivers sigue reemplazando sus cinco hojas.
-No se reemplazan estas politicas ni las opciones de la GUI.
+Busqueda, completado y drivers conservan las hojas existentes y buscan un
+nombre disponible: `RESULTADO`, `RESULTADO_2`, `RESULTADO_3`, etc. Se consideran
+colisiones sin distinguir mayusculas/minusculas y despues de limpiar caracteres
+invalidos/truncar a 31 caracteres. Drivers conserva tambien sus cinco hojas
+de salidas anteriores y crea nuevas hojas con sufijo. La app muestra los
+nombres finales en el log y el mensaje de resultado. Esta proteccion cambia
+deliberadamente la politica destructiva inicial, sin alterar el matching.
 
 Los libros `.xlsm` se abren con `keep_vba=True`. Se verifica conservacion de
 los bytes VBA mediante un paquete sintetico; no se han ejecutado macros

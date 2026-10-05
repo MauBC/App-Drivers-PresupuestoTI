@@ -11,7 +11,7 @@ from src.core.excel_safety import (
     captured_sources, attach_capture, atomic_write, atomic_update, ExcelHeadersChangedError,
 )
 
-from src.core.search_executor import normalize_text, sanitize_sheet_name, apply_xlsxwriter_format
+from src.core.search_executor import normalize_text, sanitize_sheet_name, unique_sheet_name, apply_xlsxwriter_format
 
 
 DRIVER_PORCENTAJE = "porcentaje"
@@ -1125,16 +1125,8 @@ def safe_excel_value(value):
     return value
 
 
-def delete_sheet_if_exists(workbook, sheet_name: str):
-    if sheet_name in workbook.sheetnames:
-        ws = workbook[sheet_name]
-        workbook.remove(ws)
-
-
 def write_dataframe_to_workbook_sheet(workbook, sheet_name: str, df: pd.DataFrame):
-    clean_sheet_name = sanitize_sheet_name(sheet_name)
-
-    delete_sheet_if_exists(workbook, clean_sheet_name)
+    clean_sheet_name = unique_sheet_name(workbook, sheet_name)
 
     ws = workbook.create_sheet(clean_sheet_name)
 
@@ -1173,6 +1165,8 @@ def write_dataframe_to_workbook_sheet(workbook, sheet_name: str, df: pd.DataFram
         column_letter = ws.cell(row=1, column=col_idx).column_letter
         ws.column_dimensions[column_letter].width = min(width, 45)
 
+    return ws.title
+
 
 def export_driver_result(
     df_driver: pd.DataFrame,
@@ -1201,15 +1195,17 @@ def export_driver_result(
     # Modo principal: escribir dentro del mismo Excel origen.
     if source_file_path is not None:
         original_path = Path(source_file_path)
+        created_sheets = []
 
         def modify(workbook):
-            write_dataframe_to_workbook_sheet(workbook, "DRIVER", df_driver)
-            write_dataframe_to_workbook_sheet(workbook, "RESUMEN_DRIVER", df_resumen_driver)
-            write_dataframe_to_workbook_sheet(workbook, "RESUMEN_CECO", df_resumen_ceco)
-            write_dataframe_to_workbook_sheet(workbook, "OBSERVADOS", df_observados)
-            write_dataframe_to_workbook_sheet(workbook, "RESUMEN", df_resumen)
+            for name, frame in [("DRIVER", df_driver), ("RESUMEN_DRIVER", df_resumen_driver),
+                                ("RESUMEN_CECO", df_resumen_ceco), ("OBSERVADOS", df_observados),
+                                ("RESUMEN", df_resumen)]:
+                created_sheets.append(write_dataframe_to_workbook_sheet(workbook, name, frame))
 
-        return atomic_update(df_driver, original_path, modify)
+        output = atomic_update(df_driver, original_path, modify)
+        df_driver.attrs["excel_output_sheets"] = created_sheets
+        return output
 
     # Modo legacy: generar archivo nuevo si algun flujo antiguo lo usa.
     output_path = Path(output_dir)
@@ -1236,4 +1232,6 @@ def export_driver_result(
             df.to_excel(writer, index=False, sheet_name=clean_sheet)
             apply_xlsxwriter_format(writer, df, clean_sheet)
 
-    return atomic_write(file_path, serialize)
+    output = atomic_write(file_path, serialize)
+    df_driver.attrs["excel_output_sheets"] = ["DRIVER", "RESUMEN_DRIVER", "RESUMEN_CECO", "OBSERVADOS", "RESUMEN"]
+    return output

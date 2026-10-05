@@ -24,6 +24,7 @@ from src.core.search_executor import (
     read_configured_excel,
     get_search_value,
     sanitize_sheet_name,
+    unique_sheet_name,
     apply_xlsxwriter_format,
 )
 
@@ -550,23 +551,6 @@ def _run_completion(config: dict) -> tuple[pd.DataFrame, dict]:
     return df, summary
 
 
-def unique_sheet_name(workbook, wanted_name: str) -> str:
-    base = sanitize_sheet_name(wanted_name)
-    if base not in workbook.sheetnames:
-        return base
-
-    counter = 2
-    while True:
-        suffix = f"_{counter}"
-        max_len = 31 - len(suffix)
-        candidate = f"{base[:max_len]}{suffix}"
-
-        if candidate not in workbook.sheetnames:
-            return candidate
-
-        counter += 1
-
-
 def write_dataframe_to_openpyxl_sheet(workbook, sheet_name: str, df: pd.DataFrame):
     ws = workbook.create_sheet(sheet_name)
 
@@ -614,12 +598,18 @@ def export_completion_result(df: pd.DataFrame, config: dict) -> Path:
             with pd.ExcelWriter(temporary, engine="xlsxwriter") as writer:
                 df.to_excel(writer, index=False, sheet_name=sheet_name)
                 apply_xlsxwriter_format(writer, df, sheet_name)
-        return atomic_write(output_path, serialize)
+        output = atomic_write(output_path, serialize)
+        df.attrs["excel_output_sheets"] = [sheet_name]
+        return output
 
     if output_mode == "hoja_nueva_mismo_excel":
+        created_sheets = []
         def modify(workbook):
             sheet_name = unique_sheet_name(workbook, wanted_sheet)
             write_dataframe_to_openpyxl_sheet(workbook, sheet_name, df)
-        return atomic_update(df, original_path, modify)
+            created_sheets.append(sheet_name)
+        output = atomic_update(df, original_path, modify)
+        df.attrs["excel_output_sheets"] = created_sheets
+        return output
 
     raise ValueError(f"Modo de salida de completado no soportado: {output_mode}")

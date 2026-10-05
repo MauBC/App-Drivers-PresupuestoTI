@@ -35,3 +35,7 @@ El diseño, checkpoints y limites estan documentados en
 
 La ejecucion en segundo plano y las mediciones de rendimiento estan en
 [docs/optimization.md](docs/optimization.md).
+
+Las salidas dentro de un libro conservan todas sus hojas anteriores. Si el
+nombre solicitado existe, se genera uno libre con sufijo (`RESULTADO_2`,
+`DRIVER_2`, etc.). El log y el mensaje final indican las hojas creadas.

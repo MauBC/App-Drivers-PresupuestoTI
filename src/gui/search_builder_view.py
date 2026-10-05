@@ -378,10 +378,10 @@ class SearchBuilderView(ctk.CTkFrame):
             result_df, summary = run_search(config, progress=report)
             report("Guardando resultado...")
             output_path = export_result(result_df, config)
-            return output_path, summary
+            return output_path, summary, result_df.attrs["excel_output_sheets"]
 
         def finished(result):
-            output_path, summary = result
+            output_path, summary, output_sheets = result
             self.log("Busqueda terminada.")
             self.log(f"Filas template: {summary['template_rows']}")
             self.log(f"Filas base: {summary['base_rows']}")
@@ -391,7 +391,8 @@ class SearchBuilderView(ctk.CTkFrame):
             self.log(f"NO ENCONTRADO: {summary['no_encontrados']}")
 
             self.log(f"Excel generado: {output_path}")
-            messagebox.showinfo("Busqueda terminada", f"Resultado generado en:\n{output_path}")
+            self.log(f"Hojas generadas: {', '.join(output_sheets)}")
+            messagebox.showinfo("Busqueda terminada", f"Resultado generado en:\n{output_path}\nHojas: {', '.join(output_sheets)}")
 
         tasks.start(
             work, self.btn_execute, "Ejecutar busqueda", finished, failed,
@@ -568,10 +569,10 @@ class SearchBuilderView(ctk.CTkFrame):
             result_df, summary = run_completion(config, progress=report)
             report("Guardando resultado...")
             output_path = export_completion_result(result_df, config)
-            return output_path, summary
+            return output_path, summary, result_df.attrs["excel_output_sheets"]
 
         def finished(result):
-            output_path, summary = result
+            output_path, summary, output_sheets = result
             self.log("[completar] Proceso terminado.")
             self.log(f"[completar] Filas resultado anterior: {summary['total_filas_resultado']}")
             self.log(f"[completar] Filas reprocesadas: {summary['filas_reprocesadas']}")
@@ -581,7 +582,8 @@ class SearchBuilderView(ctk.CTkFrame):
             self.log(f"[completar] NO ENCONTRADO finales: {summary['no_encontrados_finales']}")
 
             self.log(f"[completar] Excel completado generado: {output_path}")
-            messagebox.showinfo("Completado terminado", f"Resultado generado en:\n{output_path}")
+            self.log(f"[completar] Hojas generadas: {', '.join(output_sheets)}")
+            messagebox.showinfo("Completado terminado", f"Resultado generado en:\n{output_path}\nHojas: {', '.join(output_sheets)}")
 
         tasks.start(
             work, self.btn_complete, "Completar resultado", finished, failed,
