@@ -392,7 +392,7 @@ class SearchBuilderView(ctk.CTkFrame):
 
             self.log(f"Excel generado: {output_path}")
             self.log(f"Hojas generadas: {', '.join(output_sheets)}")
-            messagebox.showinfo("Busqueda terminada", f"Resultado generado en:\n{output_path}\nHojas: {', '.join(output_sheets)}")
+            messagebox.showinfo("Busqueda terminada", f"Guardado en este equipo:\n{output_path}\nHojas: {', '.join(output_sheets)}")
 
         tasks.start(
             work, self.btn_execute, "Ejecutar busqueda", finished, failed,
@@ -583,7 +583,7 @@ class SearchBuilderView(ctk.CTkFrame):
 
             self.log(f"[completar] Excel completado generado: {output_path}")
             self.log(f"[completar] Hojas generadas: {', '.join(output_sheets)}")
-            messagebox.showinfo("Completado terminado", f"Resultado generado en:\n{output_path}\nHojas: {', '.join(output_sheets)}")
+            messagebox.showinfo("Completado terminado", f"Guardado en este equipo:\n{output_path}\nHojas: {', '.join(output_sheets)}")
 
         tasks.start(
             work, self.btn_complete, "Completar resultado", finished, failed,

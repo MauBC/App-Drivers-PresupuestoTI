@@ -66,9 +66,10 @@ medio no puede actualizar el original sin pasar por el procesamiento.
 Se coordina el destino por ruta resuelta usando un lock de sistema operativo.
 El lock se libera con el cierre del proceso, tambien si este muere. El archivo
 de lock queda en el temporal del sistema y no se borra para evitar carreras
-entre instancias que ya lo abrieron. Se mantienen tres intentos con esperas
-de 0.15 y 0.30 segundos para errores transitorios; cambios externos y archivos
-invalidos no se reintentan al publicar.
+entre instancias que ya lo abrieron. La publicación tiene cinco intentos con esperas de 0.5, 1, 1.5 y 2 segundos
+para bloqueos transitorios (WinError 5, 32 y 33). Cada intento verifica de nuevo
+el destino. Cambios externos y archivos inválidos no se reintentan al publicar.
+Las otras operaciones conservan los tres intentos de 0.15 y 0.30 segundos.
 
 El guardado ocurre en un temporal hermano. Un writer cerrado produce el
 temporal y se valida su integridad antes de publicar. La actualizacion usa
@@ -108,8 +109,8 @@ Excel, OneDrive, SharePoint ni instancias en otros equipos/usuarios. Una ruta
 alternativa al mismo archivo puede no compartir el mismo lock.
 
 Un kill impide ejecutar finally: puede quedar un temporal hermano incompleto
-o un directorio de captura huerfano. Nunca se publica automaticamente ese
-temporal. El test de crash confirma que el original permanece intacto y el
+o un directorio de captura huerfano. Nunca se publica automáticamente ese temporal. Si ya se había preparado una
+copia de recuperación válida, se puede recuperar desde Resultados pendientes. El test de crash confirma que el original permanece intacto y el
 lock queda libre. Se pueden eliminar estos temporales despues de cerrar las
 instancias; no se hace una limpieza indiscriminada de archivos.
 
@@ -135,3 +136,38 @@ git status --short
 
 Los Excel de pruebas viven en `tmp_path`. No se versionan archivos de usuario,
 perfiles locales, entornos virtuales ni resultados generados.
+
+
+## Recuperación local de guardados
+
+Antes de publicar un libro ya serializado y validado, se conserva su copia en
+`%LOCALAPPDATA%/AppDriversPresupuestoTI/recovery` (temporal del sistema como
+alternativa cuando LOCALAPPDATA no está definido). Los registros JSON y su
+copia se sincronizan a disco; cada evento se publica por renombrado local.
+No se ejecuta otra vez el match ni la generación de drivers al recuperar.
+
+Resultados pendientes permite reintentar el destino original con su hash
+esperado, o guardar una copia completa del libro en otro nombre inexistente.
+Conserva la extensión XLSX/XLSM. No sobrescribe otro archivo elegido mediante
+el diálogo. Los pendientes no bloquean otros trabajos ni ejecuciones futuras.
+La copia está ligada al equipo/usuario; no viaja automáticamente con el ZIP
+portable y puede contener todos los datos del libro original.
+
+Tras guardar, se registra un recibo y se elimina el Excel de recuperación; se
+conservan los pequeños recibos para reconocer un reintento ya completado. Si
+el proceso termina entre la publicación y el recibo, la recuperación compara
+el hash completo de los destinos intentados con la copia y evita repetir el
+guardado si ya coincide. Si un tercero editó esa salida después del crash,
+no se puede confirmar automáticamente su publicación; se conserva el pendiente.
+
+Si el cálculo o la serialización falla antes de producir un Excel válido, no
+hay libro recuperable. Si el archivo original no puede leerse para construir
+la salida, tampoco se puede reconstruir su contenido completo. Un fallo del
+almacenamiento local puede impedir conservar la copia y se comunica como error.
+No existe garantía absoluta ante fallos de disco/corte eléctrico.
+
+El guardado confirma únicamente el archivo local, nunca la sincronización de
+OneDrive/SharePoint. No se ha realizado una prueba con OneDrive corporativo
+real. Las pruebas simulan los códigos Windows en el reemplazo final, persistencia,
+conflictos humanos, copia alternativa, crash entre publicación y recibo,
+recuperación desde registros de disco y el panel GUI.
