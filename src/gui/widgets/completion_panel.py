@@ -572,7 +572,7 @@ class CompletionPanel(ctk.CTkScrollableFrame):
 
             self._log(f"[completar] Resultado generado: {output_path}")
             self._log(f"[completar] Hojas generadas: {', '.join(output_sheets)}")
-            messagebox.showinfo("Completado terminado", f"Resultado generado en:\n{output_path}\nHojas: {', '.join(output_sheets)}")
+            messagebox.showinfo("Completado terminado", f"Guardado en este equipo:\n{output_path}\nHojas: {', '.join(output_sheets)}")
 
         tasks.start(
             work, self.btn_complete, "Completar resultado", finished, failed,

@@ -2,6 +2,8 @@
 
 from src.gui.search_builder_view import SearchBuilderView
 from src.core.excel_safety import configure_logging
+from src.core import excel_recovery
+from src.gui.recovery_panel import RecoveryPanel
 
 
 class PresupuestoApp(ctk.CTk):
@@ -21,7 +23,22 @@ class PresupuestoApp(ctk.CTk):
         self.view = SearchBuilderView(self)
         self.view.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
 
+        self.pending_button = ctk.CTkButton(self, text="Resultados pendientes", command=self.open_pending)
+        self.pending_button.grid(row=1, column=0, sticky="e", padx=12, pady=6)
+        self.refresh_pending()
+
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def refresh_pending(self):
+        self.pending_button.configure(text=f"Resultados pendientes ({len(excel_recovery.pending())})")
+
+    def open_pending(self):
+        panel = getattr(self, "recovery_panel", None)
+        if panel is None or not panel.winfo_exists():
+            self.recovery_panel = RecoveryPanel(self)
+        else:
+            panel.lift()
+
 
     def on_close(self):
         tasks = getattr(self, "_background_tasks", None)

@@ -4,6 +4,18 @@ import pytest
 from openpyxl import Workbook
 
 
+@pytest.fixture(autouse=True)
+def isolated_recovery(tmp_path, monkeypatch, request):
+    # Los tests nunca crean pendientes en los datos reales del usuario.
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+    yield
+    if "tk_root" in request.fixturenames:
+        # Tk debe liberar los widgets del test desde el hilo de la interfaz,
+        # antes de que el siguiente worker active el recolector de Python.
+        import gc
+        gc.collect()
+
+
 @pytest.fixture(scope="session")
 def tk_root():
     import customtkinter as ctk

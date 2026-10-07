@@ -44,7 +44,7 @@ class ExcelBusyError(ExcelError):
     def __init__(self, path):
         self.path = Path(path)
         super().__init__(f"No se puede acceder a {self.path.name} porque esta ocupado o no tiene permisos. "
-                         "Cierre el archivo en Microsoft Excel y vuelva a intentarlo.")
+                         "Puede estar bloqueado por Excel, OneDrive u otro proceso. Revise también los permisos y vuelva a intentar el guardado.")
 
 
 class ExcelChangedError(ExcelError):
@@ -264,32 +264,39 @@ def destination_guard(path):
                 fcntl.flock(stream, fcntl.LOCK_UN)
 
 
-def atomic_write(destination, serialize, expected=None):
-    """Serialize recibe un temporal hermano. expected=None exige destino inexistente.
-
-    El callback debe cerrar writers/workbooks antes de regresar. El lock cubre la
-    construccion y publicacion. Un fallo anterior al replace conserva el original.
-    """
-    destination = Path(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    with destination_guard(destination):
-        retry(lambda: check_writable(destination), destination)
-        assert_unchanged(destination, expected)
-        descriptor, name = tempfile.mkstemp(prefix=".presupuesto_", suffix=destination.suffix, dir=destination.parent)
+def atomic_write(destination, serialize, expected=None, recoverable=True):
+    """Valida y conserva el resultado antes de intentar publicarlo en el destino."""
+    from src.core import excel_recovery
+    destination = Path(destination).resolve()
+    recovery_id = None
+    temporary = None
+    try:
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            descriptor, name = tempfile.mkstemp(prefix=".presupuesto_", suffix=destination.suffix, dir=destination.parent)
+        except OSError:
+            if not recoverable:
+                raise
+            # Si ni siquiera se puede crear un temporal hermano, conservar el cálculo localmente.
+            descriptor, name = tempfile.mkstemp(prefix=".presupuesto_", suffix=destination.suffix)
         os.close(descriptor)
         temporary = Path(name)
-        try:
-            serialize(temporary)
-            validate_package(temporary)
-            generated_hash = file_hash(temporary)
-            with temporary.open("r+b") as stream:
-                stream.flush()
-                os.fsync(stream.fileno())
+        serialize(temporary)
+        validate_package(temporary)
+        generated_hash = file_hash(temporary)
+        with temporary.open("r+b") as stream:
+            stream.flush()
+            os.fsync(stream.fileno())
+        if recoverable:
+            recovery_id = excel_recovery.prepare(temporary, destination, expected)
+        with destination_guard(destination):
             def publish():
                 check_writable(destination)
                 assert_unchanged(destination, expected)
+                if temporary.parent != destination.parent:
+                    # La copia local ya existe: no publicar entre volúmenes.
+                    raise ExcelBusyError(destination)
                 if expected is None:
-                    # Reserva no destructiva: un tercero que crea el nombre no se pierde.
                     try:
                         if os.name == "nt":
                             os.rename(temporary, destination)
@@ -300,23 +307,30 @@ def atomic_write(destination, serialize, expected=None):
                         raise ExcelChangedError(destination, None, current_hash(destination)) from error
                 else:
                     os.replace(temporary, destination)
-            retry(publish, destination)
-            logger.info("Excel guardado ruta=%s sha256=%s", destination, generated_hash)
-        except Exception:
-            logger.exception("Fallo de persistencia destino=%s temporal=%s", destination, temporary)
-            raise
-        finally:
-            if temporary.exists():
-                try:
-                    retry(temporary.unlink, temporary)
-                except ExcelBusyError:
-                    logger.exception("No se pudo limpiar temporal=%s", temporary)
+            # Esperas de 0.5, 1, 1.5 y 2 s; siempre se revalida el original.
+            retry(publish, destination, attempts=5, delay=.5)
+        if recovery_id:
+            excel_recovery.complete(recovery_id, destination)
+        logger.info("Excel guardado localmente ruta=%s sha256=%s", destination, generated_hash)
+    except Exception as error:
+        if recovery_id:
+            error.recovery_id = recovery_id
+            error.args = (str(error) + "\nEl resultado se conservó en este equipo. Abra 'Resultados pendientes' para reintentar el guardado o guardar en otro archivo.",)
+        logger.exception("Fallo de persistencia destino=%s recuperación=%s", destination, recovery_id)
+        raise
+    finally:
+        if temporary is not None and temporary.exists():
+            try:
+                retry(temporary.unlink, temporary)
+            except ExcelBusyError:
+                logger.exception("No se pudo limpiar temporal=%s", temporary)
     return destination
 
 
 def atomic_update(df, destination, modify):
     expected = expected_destination(df, destination)
     def serialize(temporary):
+        assert_unchanged(destination, expected)
         workbook = load_workbook(destination, keep_vba=Path(destination).suffix.lower() == ".xlsm")
         try:
             modify(workbook)

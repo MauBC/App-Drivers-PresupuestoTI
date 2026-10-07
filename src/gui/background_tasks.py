@@ -63,6 +63,8 @@ class BackgroundTasks:
                 else:
                     self.busy = False
                     self._button.configure(state="normal", text=self._idle_text)
+                    if hasattr(self.root, "refresh_pending"):
+                        self.root.refresh_pending()
                     if event == "success":
                         self._success(value)
                     else:

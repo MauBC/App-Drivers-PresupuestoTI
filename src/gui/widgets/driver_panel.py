@@ -861,7 +861,7 @@ class DriverPanel(ctk.CTkFrame):
             self._log(f"[drivers] Excel origen actualizado: {output_path}")
             self._log(f"[drivers] Hojas generadas: {', '.join(output_sheets)}")
 
-            messagebox.showinfo("Driver generado", f"Resultado generado en:\n{output_path}\nHojas: {', '.join(output_sheets)}")
+            messagebox.showinfo("Driver generado", f"Guardado en este equipo:\n{output_path}\nHojas: {', '.join(output_sheets)}")
 
         tasks.start(
             work, self.btn_execute, "Generar driver", finished, failed,
